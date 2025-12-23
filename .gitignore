@@ -1,0 +1,7 @@
+**/.parcel-cache
+**/node_modules
+
+.temp_source
+.temp_nm_cache
+.test
+output_html
