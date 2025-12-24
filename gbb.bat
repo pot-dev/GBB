@@ -35,13 +35,19 @@ powershell -Command "Expand-Archive -Path '%~1' -DestinationPath '%TEMP_DIR%' -F
 cd "%TEMP_DIR%"
 
 echo [3/7] Configuring Tailwind v3...
-(
-echo module.exports = {
-echo   content: ["./src/**/*.{js,jsx,ts,tsx}", "./*.html"],
-echo   theme: { extend: {} },
-echo   plugins: [],
-echo }
-) > tailwind.config.js
+if exist "%~dp0tailwind.config.js" (
+    echo ...Copying provided tailwind.config.js into project...
+    copy /Y "%~dp0tailwind.config.js" "tailwind.config.js" >nul
+) else (
+    echo ...No local tailwind.config.js found; generating default...
+    (
+    echo module.exports = {
+    echo   content: ["./src/*.{js,jsx,ts,tsx}", "./*.html"],
+    echo   theme: { extend: {} },
+    echo   plugins: [],
+    echo }
+    ) > tailwind.config.js
+)
 
 (
 echo {
