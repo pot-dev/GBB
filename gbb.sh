@@ -7,24 +7,26 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CURRENT_DIR="$(pwd)"
 
-DIST_NAME="output_html"
+# Match gbb.bat naming and behavior
+DIST_NAME=".output_html"
 TEMP_DIR=".temp_source"
 CACHE_NM=".temp_nm_cache"
+PRODUCT_DIR="output"
 INPUT_FILE="$1"
 
 # 检查输入参数
 if [ -z "$INPUT_FILE" ]; then
     echo "[ERROR] Please provide the zip file path as an argument."
-    echo "Usage: ./build.sh path/to/gemini_export.zip"
+    echo "Usage: ./gbb.sh path/to/gemini_export.zip"
     exit 1
 fi
 
 echo "[1/9] Cleaning workspace..."
 
-# 缓存 node_modules
+# 缓存 node_modules（如果有）
 if [ -d "$TEMP_DIR/node_modules" ]; then
     echo "...Caching existing dependencies..."
-    rm -rf "$CACHE_NM"
+    rm -rf "$CACHE_NM" || true
     mv "$TEMP_DIR/node_modules" "$CACHE_NM"
 fi
 
@@ -46,9 +48,9 @@ unzip -o -q "$INPUT_FILE" -d "$TEMP_DIR"
 cd "$TEMP_DIR"
 
 echo "[3/9] Configuring Tailwind v3..."
-if [ -f "$SCRIPT_DIR/tailwind.config.js" ]; then
+if [ -f "$SCRIPT_DIR/template/tailwind.config.js" ]; then
     echo "...Copying provided tailwind.config.js into project..."
-    cp -f "$SCRIPT_DIR/tailwind.config.js" "tailwind.config.js"
+    cp -f "$SCRIPT_DIR/template/tailwind.config.js" "tailwind.config.js"
 else
     echo "...No local tailwind.config.js found; generating default..."
     cat <<EOF > tailwind.config.js
@@ -86,27 +88,31 @@ safe_sed() {
 HTML_FILE="index.html"
 
 # HTML 处理
-safe_sed 's|<script.*src=".*cdn.tailwindcss.com.*"></script>||g' "$HTML_FILE"
-safe_sed 's|<link.*href=".*index.css".*>||g' "$HTML_FILE"
-safe_sed 's|</head>|<link rel="stylesheet" href="./tailwind_entry.css"></head>|g' "$HTML_FILE"
-safe_sed 's|src="/|src="./|g' "$HTML_FILE"
-safe_sed 's|href="/|href="./|g' "$HTML_FILE"
+    safe_sed 's|<script.*src=".*cdn.tailwindcss.com.*"></script>||g' "$HTML_FILE"
+    safe_sed 's|<link.*href=".*index.css".*>||g' "$HTML_FILE"
+    safe_sed 's|</head>|<link rel="stylesheet" href="./tailwind_entry.css"></head>|g' "$HTML_FILE"
+    safe_sed 's|src="/|src="./|g' "$HTML_FILE"
+    safe_sed 's|href="/|href="./|g' "$HTML_FILE"
 
-if [ ! -f "index.tsx" ] && [ -f "src/index.tsx" ]; then
-    safe_sed 's|src="./index.tsx"|src="./src/index.tsx"|g' "$HTML_FILE"
+    if [ ! -f "index.tsx" ] && [ -f "src/index.tsx" ]; then
+        safe_sed 's|src="./index.tsx"|src="./src/index.tsx"|g' "$HTML_FILE"
+    fi
+else
+    echo "[WARN] No index.html found in the unzipped package."
 fi
 
 echo "[5/9] Verifying HTML integrity..."
-if grep -q "cdn.tailwindcss.com" "$HTML_FILE"; then
-    echo ">>> WARNING: Tailwind CDN link found! Cleanup might be incomplete."
-fi
-if ! grep -q "tailwind_entry.css" "$HTML_FILE"; then
-    echo ">>> WARNING: Local CSS link was NOT injected."
+if [ -f "$HTML_FILE" ]; then
+    if grep -q "cdn.tailwindcss.com" "$HTML_FILE"; then
+        echo ">>> WARNING: Tailwind CDN link found! Cleanup might be incomplete."
+    fi
+    if ! grep -q "tailwind_entry.css" "$HTML_FILE"; then
+        echo ">>> WARNING: Local CSS link was NOT injected."
+    fi
 fi
 
 echo "[6/9] Installing/Checking dependencies..."
-# 依然需要 npm，但通常 npm 独立于 node 命令存在于 path 中
-npm install react react-dom tailwindcss@3 postcss autoprefixer --silent --no-audit
+npm install react react-dom tailwindcss@3 postcss autoprefixer --silent --no-audit || true
 
 echo "[7/9] Building with Parcel..."
 npx parcel build index.html --dist-dir "../$DIST_NAME" --public-url ./ --no-source-maps
@@ -117,44 +123,102 @@ echo "[8/9] Injecting Info Header..."
 DIST_INDEX="$DIST_NAME/index.html"
 
 if [ -f "$DIST_INDEX" ]; then
-    META_NAME="Parametric 3D Tomato"
+    META_NAME="GBB Exported Page"
     META_DESC=""
-    
-    # === 修改处：使用 grep/sed 替代 node 解析 JSON ===
-    if [ -f "$TEMP_DIR/metadata.json" ]; then
-        # 提取 name (查找 "name": "Value" 模式)
-        # 使用 sed 匹配双引号内的内容
-        found_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TEMP_DIR/metadata.json")
-        if [ -n "$found_name" ]; then META_NAME="$found_name"; fi
 
-        # 提取 description
-        found_desc=$(sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TEMP_DIR/metadata.json")
+    if [ -f "$TEMP_DIR/metadata.json" ]; then
+        found_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TEMP_DIR/metadata.json") || true
+        if [ -n "$found_name" ]; then META_NAME="$found_name"; fi
+        found_desc=$(sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TEMP_DIR/metadata.json") || true
         if [ -n "$found_desc" ]; then META_DESC="$found_desc"; fi
     fi
 
     # 读取 header 模板
     HEADER_CONTENT=""
-    if [ -f "$SCRIPT_DIR/header" ]; then
-        # 读取文件内容到变量
-        HEADER_CONTENT=$(cat "$SCRIPT_DIR/header")
-        # === 修改处：使用 Bash 字符串替换替代 node/sed ===
-        # 将 {{NAME}} 替换为 $META_NAME
+    if [ -f "$SCRIPT_DIR/template/header" ]; then
+        HEADER_CONTENT=$(cat "$SCRIPT_DIR/template/header")
         HEADER_CONTENT="${HEADER_CONTENT//\{\{NAME\}\}/$META_NAME}"
-        # 将 {{DES}} 替换为 $META_DESC
         HEADER_CONTENT="${HEADER_CONTENT//\{\{DES\}\}/$META_DESC}"
+        # write temporary header file to be consistent with .bat behavior
+        echo "$HEADER_CONTENT" > "$DIST_NAME/_gbb_header.tmp"
     fi
 
-    # 注入到文件头部
+    # Prepend header if file does not already start with a comment
     if ! head -n 1 "$DIST_INDEX" | grep -q "^\s*<!--"; then
-        echo "$HEADER_CONTENT" | cat - "$DIST_INDEX" > "${DIST_INDEX}.tmp" && mv "${DIST_INDEX}.tmp" "$DIST_INDEX"
+        if [ -f "$DIST_NAME/_gbb_header.tmp" ]; then
+            cat "$DIST_NAME/_gbb_header.tmp" "$DIST_INDEX" > "${DIST_INDEX}.tmp" && mv "${DIST_INDEX}.tmp" "$DIST_INDEX"
+            rm -f "$DIST_NAME/_gbb_header.tmp"
+        fi
     fi
 fi
 
-echo "[9/9] Creating zip archive of the output folder..."
-ZIP_FILE="$DIST_NAME/GBB_PRODUCT.zip"
-rm -f "$ZIP_FILE"
-cd "$DIST_NAME"
-zip -r -q "GBB_PRODUCT.zip" ./*
+echo "[9/9] Creating product ZIP as in gbb.bat..."
+# use source zip name as product name
+source_name="$(basename "$INPUT_FILE")"
+source_name="${source_name%.*}"
+name="${source_name/_gbb/}"
+
+EXE_DIR="$PRODUCT_DIR/$name"
+ZIP_ARCHIVE="$EXE_DIR/gbb_html.pot.zip"
+
+mkdir -p "$EXE_DIR"
+
+# create zip archive of the output folder (match .bat behavior: contents zipped)
+rm -f "$ZIP_ARCHIVE" || true
+if command -v zip >/dev/null 2>&1; then
+    (cd "$DIST_NAME" && zip -r -q "$PWD/../$ZIP_ARCHIVE" ./*) || true
+else
+    # fallback: use python to create archive
+    python3 - <<PY
+import shutil
+shutil.make_archive(r"$EXE_DIR/gbb_html.pot","zip",r"$DIST_NAME")
+PY
+fi
+
+echo "[10/9] Packaging it as a Executable (Electron)..."
+APP_DIR="$TEMP_DIR/app"
+
+if [ -d "$APP_DIR" ]; then rm -rf "$APP_DIR"; fi
+mkdir -p "$APP_DIR"
+
+echo "...Copying built web files into packaging workspace ($APP_DIR)..."
+cp -r "$DIST_NAME"/. "$APP_DIR"/ || true
+
+echo "...Writing Electron entry files (main.js, package.json) if template exists..."
+if [ -f "$SCRIPT_DIR/template/main.js" ]; then
+    cp -f "$SCRIPT_DIR/template/main.js" "$APP_DIR/main.js"
+fi
+
+cat > "$APP_DIR/package.json" <<EOF
+{
+  "name": "gbb-electron-app",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": { "start": "electron ." }
+}
+EOF
+
+echo "...Installing dependencies in the packaging workspace (this may take a minute)..."
+cd "$APP_DIR"
+npm install --save-dev electron electron-builder --no-audit --silent || echo "npm install (electron) failed or was skipped"
+
+echo "...Running electron-builder to produce a Windows app (if available)..."
+# build for current os only (mac/linux)
+# identify os
+OS_TYPE="$(uname | tr '[:upper:]' '[:lower:]')"
+if [ "$OS_TYPE" == "darwin" ]; then
+    TARGET_OS="mac"
+elif [ "$OS_TYPE" == "linux" ]; then
+    TARGET_OS="linux"
+else
+    TARGET_OS="win"
+fi
+npx electron-builder --$TARGET_OS --publish never || echo "electron-builder failed or was skipped"
 cd ..
 
-echo "[DONE] Output folder: $DIST_NAME"
+echo "...Packaging succeeded (if electron-builder ran). Copying builder output into product dir..."
+if [ -d "$APP_DIR/dist" ]; then
+    cp -r "$APP_DIR/dist" "$EXE_DIR/" || true
+fi
+
+echo "Done. Output folder: $DIST_NAME  Product folder: $EXE_DIR  Zip: $ZIP_ARCHIVE"

@@ -1,8 +1,10 @@
 **/.parcel-cache
 **/node_modules
 
+.output_html
 .temp_source
 .temp_nm_cache
 .test
 output_html
 package.json
+output

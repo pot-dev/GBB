@@ -2,9 +2,10 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-set "DIST_NAME=output_html"
+set "DIST_NAME=.output_html"
 set "TEMP_DIR=.temp_source"
 set "CACHE_NM=.temp_nm_cache"
+set "PRODUCT_DIR=output"
 
 if "%~1" == "" (
     echo [ERROR] Drag and drop your zip file here. 你应该将Gemini的压缩包用此bat打开，而不是直接启动脚本。
@@ -27,6 +28,7 @@ if exist "%CACHE_NM%" (
     echo ...Restoring dependencies...
     move "%CACHE_NM%" "%TEMP_DIR%\node_modules" >nul
 )
+md "%DIST_NAME%"
 
 echo [2/9] Unzipping...
 :: 使用 -Force 覆盖可能存在的冲突
@@ -35,9 +37,9 @@ powershell -Command "Expand-Archive -Path '%~1' -DestinationPath '%TEMP_DIR%' -F
 cd "%TEMP_DIR%"
 
 echo [3/9] Configuring Tailwind v3...
-if exist "%~dp0tailwind.config.js" (
+if exist "%~dp0template\tailwind.config.js" (
     echo ...Copying provided tailwind.config.js into project...
-    copy /Y "%~dp0tailwind.config.js" "tailwind.config.js" >nul
+    copy /Y "%~dp0template\tailwind.config.js" "tailwind.config.js" >nul
 ) else (
     echo ...No local tailwind.config.js found; generating default...
     (
@@ -89,15 +91,63 @@ cd ..
 echo [8/9] Injecting Info Header...
 if exist "%DIST_NAME%\index.html" (
     rem generate header from template file `%~dp0header`, replace placeholders from metadata.json in %TEMP_DIR%
-    powershell -Command "if(Test-Path '%TEMP_DIR%\metadata.json'){ $m=Get-Content -Path '%TEMP_DIR%\metadata.json' -Raw | ConvertFrom-Json; $n=$m.name; $d=$m.description } else { $n='Parametric 3D Tomato'; $d=''; }; $tpl = Get-Content -Path '%~dp0header' -Raw -Encoding UTF8; $tpl = $tpl -replace '\{\{NAME\}\}',$n; $tpl = $tpl -replace '\{\{DES\}\}',$d; Set-Content -Path '%DIST_NAME%\_gbb_header.tmp' -Value $tpl -Encoding UTF8"
+    powershell -Command "if(Test-Path '%TEMP_DIR%\metadata.json'){ $m=Get-Content -Path '%TEMP_DIR%\metadata.json' -Raw | ConvertFrom-Json; $n=$m.name; $d=$m.description } else { $n='GBB Exported Page'; $d=''; }; $tpl = Get-Content -Path '%~dp0template\header' -Raw -Encoding UTF8; $tpl = $tpl -replace '\{\{NAME\}\}',$n; $tpl = $tpl -replace '\{\{DES\}\}',$d; Set-Content -Path '%DIST_NAME%\_gbb_header.tmp' -Value $tpl -Encoding UTF8"
     powershell -Command "$c = Get-Content -Path '%DIST_NAME%\index.html' -Raw -Encoding UTF8; if($c -notmatch '^[\s\r\n]*<!--') { $h = Get-Content -Path '%DIST_NAME%\_gbb_header.tmp' -Raw -Encoding UTF8; Set-Content -Path '%DIST_NAME%\index.html' -Value ($h + $c) -Encoding UTF8 }"
     if exist "%DIST_NAME%\_gbb_header.tmp" del "%DIST_NAME%\_gbb_header.tmp"
     powershell -Command "$p='%DIST_NAME%\index.html'; $c=Get-Content $p -Raw; $c=$c.Trim([char]65279); $e=New-Object System.Text.UTF8Encoding $false; [System.IO.File]::WriteAllText($p, $c, $e)"
 )
 
-echo [9/9] Creating zip archive of the output folder...
-powershell -Command "if(Test-Path '%DIST_NAME%\%DIST_NAME%.zip'){Remove-Item '%DIST_NAME%\%DIST_NAME%.zip' -Force}; Compress-Archive -Path '%DIST_NAME%\*' -DestinationPath '%DIST_NAME%\GBB_PRODUCT.zip' -Force"
+rem use source zip name as product name
+for %%F in ("%~1") do set "source_name=%%~nF"
+set "name=%source_name:_gbb=%
 
-echo [DONE] Output folder: %DIST_NAME%
-start %DIST_NAME%
+set "EXE_DIR=%PRODUCT_DIR%\%name%"
+set "ZIP_ARCHIVE=%EXE_DIR%\gbb_html.pot.zip"
+
+md "%EXE_DIR%"
+
+echo [9/9] Creating zip archive of the output folder...
+powershell -Command "Compress-Archive -Path '%DIST_NAME%\*' -DestinationPath '%ZIP_ARCHIVE%' -Force"
+
+echo [DONE] HTML Output folder: %DIST_NAME%
+echo [DONE] ZIP Archive: %ZIP_ARCHIVE%
+@REM start %DIST_NAME%
 :: 移除 pause，脚本将自动退出
+
+echo [10/9] Lets package it as a Windows EXE using Electron...
+set "APP_DIR=%TEMP_DIR%\app"
+
+if exist "%APP_DIR%" rd /s /q "%APP_DIR%"
+md "%APP_DIR%"
+
+echo ...Copying built web files into packaging workspace (%APP_DIR%)...
+robocopy "%DIST_NAME%" "%APP_DIR%" /E /NFL /NDL /NJH /NJS >nul
+
+echo ...Writing Electron entry files (main.js, package.json)...
+copy /Y "%~dp0template\main.js" "%APP_DIR%\main.js" >nul
+
+(
+echo {
+echo   "name": "gbb-electron-app",
+echo   "version": "1.0.0",
+echo   "main": "main.js",
+echo   "scripts": { "start": "electron ." }
+echo }
+) > "%APP_DIR%\package.json"
+
+echo ...Installing dependencies in the packaging workspace (this may take a minute)...
+cd /d "%APP_DIR%"
+call npm install --save-dev electron electron-builder --no-audit --silent
+
+echo ...Running electron-builder to produce a Windows app (requires network) ...
+call npx electron-builder --win --x64 --publish never
+
+cd ..\..
+
+echo ...Packaging succeeded. Opening release folder...
+rem The output EXE will be in APP_DIR\dist, so copy it into EXE_DIR
+robocopy "%APP_DIR%\dist" "%EXE_DIR%" /E /NFL /NDL /NJH /NJS >nul
+echo [DONE] Output folder: %EXE_DIR%
+start %EXE_DIR%
+
+cd /d "%~dp0"
