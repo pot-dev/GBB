@@ -12,7 +12,7 @@ if "%~1" == "" (
     exit /b
 )
 
-echo [1/7] Cleaning workspace...
+echo [1/9] Cleaning workspace...
 
 if exist "%TEMP_DIR%\node_modules" (
     echo ...Caching existing dependencies...
@@ -28,13 +28,13 @@ if exist "%CACHE_NM%" (
     move "%CACHE_NM%" "%TEMP_DIR%\node_modules" >nul
 )
 
-echo [2/7] Unzipping...
+echo [2/9] Unzipping...
 :: 使用 -Force 覆盖可能存在的冲突
 powershell -Command "Expand-Archive -Path '%~1' -DestinationPath '%TEMP_DIR%' -Force"
 
 cd "%TEMP_DIR%"
 
-echo [3/7] Configuring Tailwind v3...
+echo [3/9] Configuring Tailwind v3...
 if exist "%~dp0tailwind.config.js" (
     echo ...Copying provided tailwind.config.js into project...
     copy /Y "%~dp0tailwind.config.js" "tailwind.config.js" >nul
@@ -63,7 +63,7 @@ echo @tailwind components;
 echo @tailwind utilities;
 ) > tailwind_entry.css
 
-echo [4/7] Processing HTML...
+echo [4/9] Processing HTML...
 set "PS_CMD=$h=Get-Content 'index.html' -Raw -Encoding UTF8;"
 set "PS_CMD=!PS_CMD! $h=$h -replace '<script\s+src=\".*cdn.tailwindcss.com.*\"></script>','';"
 set "PS_CMD=!PS_CMD! $h=$h -replace '<link\s+.*href=\".*index.css\".*>','';"
@@ -74,18 +74,30 @@ set "PS_CMD=!PS_CMD! if(!(Test-Path 'index.tsx') -and (Test-Path 'src/index.tsx'
 set "PS_CMD=!PS_CMD! Set-Content 'index.html' $h -Encoding UTF8;"
 powershell -Command "!PS_CMD!"
 
-echo [5/7] Verifying HTML integrity...
+echo [5/9] Verifying HTML integrity...
 :: --- 新增检查步骤 ---
 powershell -Command "$c = Get-Content 'index.html' -Raw; if ($c -match 'cdn.tailwindcss.com') { Write-Warning '>>> WARNING: Tailwind CDN link found! Cleanup might be incomplete.' }; if ($c -notmatch 'tailwind_entry.css') { Write-Warning '>>> WARNING: Local CSS link was NOT injected.' }"
 
-echo [6/7] Installing/Checking dependencies...
+echo [6/9] Installing/Checking dependencies...
 :: 因为保留了 node_modules，这一步通常是秒过
 call npm install react react-dom tailwindcss@3 postcss autoprefixer --silent --no-audit
 
-echo [7/7] Building with Parcel...
+echo [7/9] Building with Parcel...
 call npx parcel build index.html --dist-dir ../%DIST_NAME% --public-url ./ --no-source-maps
 
 cd ..
+echo [8/9] Injecting Info Header...
+if exist "%DIST_NAME%\index.html" (
+    rem generate header from template file `%~dp0header`, replace placeholders from metadata.json in %TEMP_DIR%
+    powershell -Command "if(Test-Path '%TEMP_DIR%\metadata.json'){ $m=Get-Content -Path '%TEMP_DIR%\metadata.json' -Raw | ConvertFrom-Json; $n=$m.name; $d=$m.description } else { $n='Parametric 3D Tomato'; $d=''; }; $tpl = Get-Content -Path '%~dp0header' -Raw -Encoding UTF8; $tpl = $tpl -replace '\{\{NAME\}\}',$n; $tpl = $tpl -replace '\{\{DES\}\}',$d; Set-Content -Path '%DIST_NAME%\_gbb_header.tmp' -Value $tpl -Encoding UTF8"
+    powershell -Command "$c = Get-Content -Path '%DIST_NAME%\index.html' -Raw -Encoding UTF8; if($c -notmatch '^[\s\r\n]*<!--') { $h = Get-Content -Path '%DIST_NAME%\_gbb_header.tmp' -Raw -Encoding UTF8; Set-Content -Path '%DIST_NAME%\index.html' -Value ($h + $c) -Encoding UTF8 }"
+    if exist "%DIST_NAME%\_gbb_header.tmp" del "%DIST_NAME%\_gbb_header.tmp"
+    powershell -Command "$p='%DIST_NAME%\index.html'; $c=Get-Content $p -Raw; $c=$c.Trim([char]65279); $e=New-Object System.Text.UTF8Encoding $false; [System.IO.File]::WriteAllText($p, $c, $e)"
+)
+
+echo [9/9] Creating zip archive of the output folder...
+powershell -Command "if(Test-Path '%DIST_NAME%\%DIST_NAME%.zip'){Remove-Item '%DIST_NAME%\%DIST_NAME%.zip' -Force}; Compress-Archive -Path '%DIST_NAME%\*' -DestinationPath '%DIST_NAME%\GBB_PRODUCT.zip' -Force"
+
 echo [DONE] Output folder: %DIST_NAME%
 start %DIST_NAME%
 :: 移除 pause，脚本将自动退出
