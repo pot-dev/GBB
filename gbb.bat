@@ -82,10 +82,23 @@ powershell -Command "$c = Get-Content 'index.html' -Raw; if ($c -match 'cdn.tail
 
 echo [6/9] Installing/Checking dependencies...
 :: 因为保留了 node_modules，这一步通常是秒过
-call npm install react react-dom tailwindcss@3 postcss autoprefixer --silent --no-audit
+call npm install react react-dom tailwindcss@3 postcss autoprefixer vite --silent --no-audit
 
-echo [7/9] Building with Parcel...
-call npx parcel build index.html --dist-dir ../%DIST_NAME% --public-url ./ --no-source-maps
+echo [7/9] Building with Vite (fallback to Parcel)...
+call npx vite build --outDir ../%DIST_NAME% --base ./
+set "VITE_EXIT=%ERRORLEVEL%"
+if not "%VITE_EXIT%"=="0" (
+    echo ...Falling back to Parcel...
+    call npx parcel build index.html --dist-dir ../%DIST_NAME% --public-url ./ --no-source-maps
+) else (
+    powershell -Command "if((Get-ChildItem -Path '%DIST_NAME%' -Recurse -File -ErrorAction SilentlyContinue).Count -eq 0){ exit 1 } else { exit 0 }"
+    if errorlevel 1 (
+        echo ...Vite build produced no files, falling back to Parcel...
+        call npx parcel build index.html --dist-dir ../%DIST_NAME% --public-url ./ --no-source-maps
+    ) else (
+        echo ...Vite build succeeded.
+    )
+)
 
 cd ..
 echo [8/9] Injecting Info Header...

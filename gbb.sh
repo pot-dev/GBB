@@ -112,10 +112,22 @@ if [ -f "$HTML_FILE" ]; then
 fi
 
 echo "[6/9] Installing/Checking dependencies..."
-npm install react react-dom tailwindcss@3 postcss autoprefixer --silent --no-audit || true
+npm install react react-dom tailwindcss@3 postcss autoprefixer vite --silent --no-audit || true
 
-echo "[7/9] Building with Parcel..."
-npx parcel build index.html --dist-dir "../$DIST_NAME" --public-url ./ --no-source-maps
+echo "[7/9] Building with Vite (fallback to Parcel)..."
+if npx vite build --outDir "../$DIST_NAME" --base ./ ; then
+    # Vite succeeded — ensure it produced files
+    if [ -z "$(find "../$DIST_NAME" -type f -print -quit 2>/dev/null)" ]; then
+        echo "...Vite build produced no files; falling back to Parcel..."
+        npx parcel build index.html --dist-dir "../$DIST_NAME" --public-url ./ --no-source-maps || true
+    else
+        echo "...Vite build succeeded."
+    fi
+else
+    VITE_EXIT=$?
+    echo "...Falling back to Parcel..."
+    npx parcel build index.html --dist-dir "../$DIST_NAME" --public-url ./ --no-source-maps || true
+fi
 
 cd ..
 
